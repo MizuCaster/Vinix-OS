@@ -67,6 +67,11 @@
 #define MMU_SECT_USER_RAM \
     (MMU_DESC_SECTION | MMU_AP_FULL_ACCESS | MMU_DOMAIN(MMU_DOMAIN_USER) | MMU_TEX(1) | MMU_CACHED | MMU_BUFFERED | MMU_SHAREABLE)
 
+/* Normal Non-Cacheable, Kernel-only, XN (framebuffer — CPU writes, LCDC DMA reads)
+ * Non-cacheable ensures DMA always reads fresh data from DDR without explicit flushes */
+#define MMU_SECT_FB_RAM \
+    (MMU_DESC_SECTION | MMU_AP_KERN_RW | MMU_DOMAIN(MMU_DOMAIN_KERNEL) | MMU_TEX(1) | MMU_XN)
+
 /* ============================================================
  * DACR — Domain Access Control
  * ============================================================ */
@@ -139,9 +144,16 @@
 #define PERIPH_L4_WKUP_PA 0x44E00000
 #define PERIPH_L4_WKUP_SECTIONS 1
 
-/* L4_PER: INTC (0x48200000), DMTIMER2 (0x48040000) */
+/* L4_PER: INTC (0x48200000), DMTIMER2 (0x48040000), LCDC (0x4830E000) */
 #define PERIPH_L4_PER_PA 0x48000000
-#define PERIPH_L4_PER_SECTIONS 3
+#define PERIPH_L4_PER_SECTIONS 4
+
+/* Framebuffer: 4MB in DDR3, identity mapped (CPU writes, LCDC DMA reads)
+ * 1280x720x4 = 3.52MB → 4 sections @ 1MB granularity
+ * Placed after Kernel (5MB) + User (1MB) + 2MB margin = offset 8MB
+ * Spans: 0x80800000 – 0x80BFFFFF */
+#define FB_PA_BASE      0x80800000
+#define FB_SECTIONS     4
 
 /* ============================================================
  * Boot-time Temporary Identity Mapping

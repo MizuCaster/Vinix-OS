@@ -15,6 +15,18 @@
 #include "uart.h"
 
 /* ============================================================
+ * Pinmux (Control Module)
+ * ============================================================ */
+
+/* Control module base for pad configuration */
+#define CTRL_MOD_BASE           0x44E10000
+/* Dedicated I2C0 pads — mode 0 = I2C0 directly (not muxed from UART) */
+#define CONF_I2C0_SDA           (CTRL_MOD_BASE + 0x988)
+#define CONF_I2C0_SCL           (CTRL_MOD_BASE + 0x98C)
+/* mode 0 | pullup enabled | RX active | slow slew */
+#define PAD_I2C0_MODE           0x70
+
+/* ============================================================
  * Clock Management
  * ============================================================ */
 
@@ -50,6 +62,7 @@
 #define I2C_SCLL        0xB4    /* SCL low time */
 #define I2C_SCLH        0xB8    /* SCL high time */
 #define I2C_BUFSTAT     0xC0    /* Buffer status */
+#define I2C_SYSTEST     0xBC    /* System test register */
 
 /* ============================================================
  * I2C_SYSC bits
@@ -146,19 +159,24 @@ static void i2c_clear_status(void)
 }
 
 /**
- * Flush FIFO by disabling and re-enabling module.
+ * Flush FIFO and reset I2C state machine after a failed transaction.
+ * Forces STOP on the bus before resetting the module to recover
+ * from stuck-bus conditions (e.g. slave holding SDA low).
  */
 static void i2c_flush(void)
 {
-    uint32_t con = mmio_read32(I2C0_BASE + I2C_CON);
+    /* Force STOP condition to release any stuck slave */
+    mmio_write32(I2C0_BASE + I2C_CON, I2C_CON_EN | I2C_CON_MST | I2C_CON_STP);
+    for (volatile int i = 0; i < 500; i++);
 
-    /* Disable module to clear FIFOs */
+    /* Disable module to reset internal FIFO and state machine */
     mmio_write32(I2C0_BASE + I2C_CON, 0);
-    for (volatile int i = 0; i < 50; i++);
+    for (volatile int i = 0; i < 100; i++);
 
-    /* Re-enable */
-    mmio_write32(I2C0_BASE + I2C_CON, con | I2C_CON_EN);
-    for (volatile int i = 0; i < 50; i++);
+    /* Re-enable with EN only — do NOT restore STT/STP, that would
+     * immediately trigger a new transaction with stale state */
+    mmio_write32(I2C0_BASE + I2C_CON, I2C_CON_EN);
+    for (volatile int i = 0; i < 100; i++);
 
     i2c_clear_status();
 }
@@ -173,6 +191,13 @@ void i2c_init(void)
     uint32_t timeout;
 
     uart_printf("[I2C] Initializing I2C0...\n");
+
+    /* Step 0: Configure dedicated I2C0 pads (mode 0, pullup, RX active)
+     * ROM bootloader already sets these for PMIC access; we re-assert to own state */
+    mmio_write32(CONF_I2C0_SCL, PAD_I2C0_MODE);
+    mmio_write32(CONF_I2C0_SDA, PAD_I2C0_MODE);
+    uart_printf("[I2C] Pinmux configured (SCL=0x%x, SDA=0x%x)\n",
+                mmio_read32(CONF_I2C0_SCL), mmio_read32(CONF_I2C0_SDA));
 
     /* Step 1: Enable I2C0 module clock
      * I2C0 is in Wakeup domain (CM_WKUP_I2C0_CLKCTRL)
@@ -242,6 +267,14 @@ void i2c_init(void)
     /* Verify: read module revision */
     val = mmio_read32(I2C0_BASE + I2C_REVNB_LO);
     uart_printf("[I2C] Module revision = 0x%x\n", val);
+
+    /* Physical bus state: SCL_I=bit11, SDA_I=bit9
+     * Both should be 1 (pulled high) when bus is idle.
+     * If either is 0 → stuck low → hardware/pinmux problem. */
+    val = mmio_read32(I2C0_BASE + I2C_SYSTEST);
+    uart_printf("[I2C] SYSTEST=0x%x  SCL_I=%d  SDA_I=%d  (1=high=OK)\n",
+                val, (val >> 11) & 1, (val >> 9) & 1);
+
     uart_printf("[I2C] I2C0 initialized (100kHz standard mode)\n");
 }
 
@@ -298,7 +331,9 @@ int i2c_write_reg(uint8_t slave_addr, uint8_t reg, uint8_t val)
     /* Wait for transfer complete (ARDY = access ready) */
     stat = i2c_wait_status(I2C_STAT_ARDY);
     if (!stat) {
-        uart_printf("[I2C] Timeout waiting for ARDY on write\n");
+        uint32_t raw = mmio_read32(I2C0_BASE + I2C_IRQSTATUS_RAW);
+        uart_printf("[I2C] ARDY timeout write sa=0x%x reg=0x%x raw=0x%x\n",
+                    slave_addr, reg, raw);
         i2c_flush();
         return -1;
     }
@@ -456,4 +491,61 @@ int i2c_read_block(uint8_t slave_addr, uint8_t reg, uint8_t *buf, int len)
     }
 
     return 0;
+}
+
+/* ============================================================
+ * Bus Scan (Diagnostic)
+ * ============================================================
+ *
+ * Probes addresses 0x08-0x77. For each address, attempts a
+ * 1-byte write and checks for ACK vs NACK.
+ * Prints which addresses respond — helps confirm whether
+ * TDA19988 (0x34/0x70) is on this I2C bus.
+ */
+void i2c_scan(void)
+{
+    uint8_t addr;
+    int found = 0;
+
+    uart_printf("[I2C] Bus scan starting (0x08-0x77)...\n");
+
+    for (addr = 0x08; addr <= 0x77; addr++) {
+        uint32_t stat;
+
+        if (i2c_wait_bus_free() != 0) {
+            i2c_flush();
+            continue;
+        }
+
+        i2c_clear_status();
+        mmio_write32(I2C0_BASE + I2C_SA, addr);
+        mmio_write32(I2C0_BASE + I2C_CNT, 1);
+        mmio_write32(I2C0_BASE + I2C_CON,
+                     I2C_CON_EN | I2C_CON_MST | I2C_CON_TRX |
+                     I2C_CON_STT | I2C_CON_STP);
+
+        stat = i2c_wait_status(I2C_STAT_XRDY);
+        if (!stat || (stat & I2C_STAT_NACK)) {
+            mmio_write32(I2C0_BASE + I2C_IRQSTATUS, stat);
+            i2c_flush();
+            continue;
+        }
+
+        /* Write dummy byte */
+        mmio_write32(I2C0_BASE + I2C_DATA, 0x00);
+        mmio_write32(I2C0_BASE + I2C_IRQSTATUS, I2C_STAT_XRDY);
+
+        stat = i2c_wait_status(I2C_STAT_ARDY);
+        if (stat && !(stat & I2C_STAT_NACK)) {
+            uart_printf("[I2C] FOUND device at 0x%x\n", addr);
+            found++;
+        }
+        mmio_write32(I2C0_BASE + I2C_IRQSTATUS, stat);
+        i2c_flush();
+    }
+
+    if (!found)
+        uart_printf("[I2C] Bus scan: no devices found\n");
+    else
+        uart_printf("[I2C] Bus scan complete: %d device(s)\n", found);
 }

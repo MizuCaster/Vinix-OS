@@ -69,4 +69,10 @@ int i2c_write_reg(uint8_t slave_addr, uint8_t reg, uint8_t val);
  */
 int i2c_read_block(uint8_t slave_addr, uint8_t reg, uint8_t *buf, int len);
 
+/**
+ * Scan I2C bus and print all responding addresses.
+ * Diagnostic only — not used in normal operation.
+ */
+void i2c_scan(void);
+
 #endif /* I2C_H */

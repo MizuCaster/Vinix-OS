@@ -58,6 +58,14 @@ void mmu_init(void)
         pgd[pa >> MMU_SECTION_SHIFT] = 0; /* FAULT */
     }
 
+    /* Re-add framebuffer mapping — cleared by identity map removal above
+     * (FB_PA_BASE falls within the 128MB DDR identity range) */
+    for (i = 0; i < FB_SECTIONS; i++)
+    {
+        pa = FB_PA_BASE + (i * MMU_SECTION_SIZE);
+        pgd[pa >> MMU_SECTION_SHIFT] = pa | MMU_SECT_FB_RAM;
+    }
+
     /* Flush entire TLB - clear stale identity-map entries */
     __asm__ __volatile__(
         "mov r0, #0\n\t"
@@ -85,6 +93,8 @@ void mmu_init(void)
                 PERIPH_L4_WKUP_PA, PERIPH_L4_WKUP_SECTIONS);
     uart_printf("[MMU] Peripheral L4_PER:  PA 0x%x (%d MB) [Strongly Ordered, Identity]\n",
                 PERIPH_L4_PER_PA, PERIPH_L4_PER_SECTIONS);
+    uart_printf("[MMU] Framebuffer:        PA 0x%x – 0x%x (%d MB) [Non-Cacheable, Identity]\n",
+                FB_PA_BASE, FB_PA_BASE + (FB_SECTIONS * MMU_SECTION_SIZE) - 1, FB_SECTIONS);
     uart_printf("[MMU] Identity mapping removed (VA 0x80000000 now unmapped)\n");
     uart_printf("[MMU] VBAR = 0x%x\n", vbar_va);
     uart_printf("[MMU] DACR = 0x%x (D0=CLIENT, D1=CLIENT)\n", MMU_DACR_VALUE);
@@ -135,6 +145,13 @@ mmu_build_page_table_boot(uint32_t *pgd_pa)
     {
         pa = PERIPH_L4_PER_PA + (i * MMU_SECTION_SIZE);
         pgd_pa[pa >> MMU_SECTION_SHIFT] = pa | MMU_SECT_PERIPHERAL;
+    }
+
+    /* Framebuffer: identity mapped, normal non-cacheable (CPU writes, LCDC DMA reads) */
+    for (i = 0; i < FB_SECTIONS; i++)
+    {
+        pa = FB_PA_BASE + (i * MMU_SECTION_SIZE);
+        pgd_pa[pa >> MMU_SECTION_SHIFT] = pa | MMU_SECT_FB_RAM;
     }
 
     /* True User Space: VA 0x40000000 (User RW) */
