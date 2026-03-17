@@ -9,6 +9,7 @@
 #define LCDC_H
 
 #include "types.h"
+#include "mmu.h"
 
 /* ============================================================
  * LCDC Configuration
@@ -17,9 +18,7 @@
 /* LCDC base address (L4_PER domain) */
 #define LCDC_BASE           0x4830E000
 
-/* Framebuffer physical address in DDR3
- * Placed at 8MB offset from DDR base, after kernel (5MB) + user (1MB) + margin */
-#define FB_PA_BASE          0x80800000
+/* FB_PA_BASE is defined in mmu.h as part of the platform memory map */
 
 /* ============================================================
  * Public API

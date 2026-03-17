@@ -17,6 +17,9 @@
 #include "ramfs.h"
 #include "syscalls.h"
 #include "types.h"
+#include "i2c.h"
+#include "lcdc.h"
+#include "tda19988.h"
 /* ============================================================
  * User Space Payload (Defined in payload.S)
  * ============================================================ */
@@ -51,6 +54,12 @@ void kernel_main(void)
      * MMU was already enabled by entry.S (Phase A trampoline).
      * We are now running at VA 0xC0xxxxxx. */
     mmu_init();
+
+    /* Graphics subsystem: I2C → LCDC → TDA19988 HDMI */
+    i2c_init();
+    i2c_scan();     /* Diagnostic: print devices found on I2C0 */
+    lcdc_init();
+    tda19988_init();
 
     intc_init();
     irq_init();

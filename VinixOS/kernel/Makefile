@@ -19,7 +19,8 @@ ASM_BOOT_SRC = $(SRC)/arch/arm/entry/reset.S $(SRC)/arch/arm/entry/entry.S
 ASM_EXC_SRC = $(SRC)/arch/arm/exceptions/vectors.S $(SRC)/arch/arm/exceptions/exception_entry.S
 C_KERNEL_SRC = $(SRC)/kernel/main.c $(SRC)/kernel/exceptions/exception_handlers.c $(SRC)/kernel/irq/irq_core.c \
                $(SRC)/kernel/core/svc_handler.c
-C_DRIVER_SRC = $(SRC)/drivers/uart.c $(SRC)/drivers/watchdog.c $(SRC)/drivers/intc.c $(SRC)/drivers/timer.c
+C_DRIVER_SRC = $(SRC)/drivers/uart.c $(SRC)/drivers/watchdog.c $(SRC)/drivers/intc.c $(SRC)/drivers/timer.c \
+               $(SRC)/drivers/i2c.c $(SRC)/drivers/lcdc.c $(SRC)/drivers/tda19988.c
 C_FS_SRC = $(SRC)/kernel/fs/vfs.c $(SRC)/kernel/fs/ramfs.c
 C_LIBC_SRC = libc/src/string.c
 
@@ -31,7 +32,9 @@ RAMFS_GENERATED_S = $(BUILD_DIR)/ramfs_payload.S
 
 # Objects (Flattened in BUILD_DIR)
 ASM_OBJ = $(addprefix $(BUILD_DIR)/, vectors.o reset.o entry.o exception_entry.o context_switch.o mmu_enable.o)
-C_OBJ = $(addprefix $(BUILD_DIR)/, main.o exception_handlers.o irq_core.o uart.o watchdog.o intc.o timer.o scheduler.o task.o idle.o svc_handler.o mmu.o payload.o vfs.o ramfs.o ramfs_generated.o string.o)
+C_OBJ = $(addprefix $(BUILD_DIR)/, main.o exception_handlers.o irq_core.o uart.o watchdog.o intc.o timer.o \
+               i2c.o lcdc.o tda19988.o \
+               scheduler.o task.o idle.o svc_handler.o mmu.o payload.o vfs.o ramfs.o ramfs_generated.o string.o)
 OBJS = $(ASM_OBJ) $(C_OBJ)
 
 # Flags
@@ -118,6 +121,15 @@ $(BUILD_DIR)/intc.o: $(SRC)/drivers/intc.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/timer.o: $(SRC)/drivers/timer.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/i2c.o: $(SRC)/drivers/i2c.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lcdc.o: $(SRC)/drivers/lcdc.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tda19988.o: $(SRC)/drivers/tda19988.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Assembly files - MMU
