@@ -20,6 +20,8 @@
 #include "i2c.h"
 #include "lcdc.h"
 #include "tda19988.h"
+#include "fb.h"
+#include "display_task.h"
 /* ============================================================
  * User Space Payload (Defined in payload.S)
  * ============================================================ */
@@ -66,18 +68,8 @@ void kernel_main(void)
     lcdc_start_raster();        /* Start pixel clock — TDA needs this for TMDS */
     tda19988_init();            /* Full TDA config with pixel clock present */
 
-    /* Test: fill framebuffer with WHITE */
-    {
-        uint16_t *fb = lcdc_get_framebuffer();
-        uint32_t w = lcdc_get_width();
-        uint32_t h = lcdc_get_height();
-
-        for (uint32_t i = 0; i < w * h; i++) {
-            fb[i] = 0xFFFF;  /* White in RGB565 */
-        }
-
-        uart_printf("[FB] White fill OK, %dx%d RGB565\n", w, h);
-    }
+    /* Framebuffer ready — display task will handle boot screen */
+    fb_init();
 
     intc_init();
     irq_init();
@@ -119,7 +111,11 @@ void kernel_main(void)
     struct task_struct *idle_ptr = get_idle_task();
     scheduler_add_task(idle_ptr);
 
-    /* 4. Add User Application Task (Shell via SDK) */
+    /* 4. Add Display Task (Kernel Mode — boot screen + HDMI) */
+    struct task_struct *display_ptr = get_display_task();
+    scheduler_add_task(display_ptr);
+
+    /* 5. Add User Application Task (Shell via SDK) */
     shell_task.name = "User App (Shell)";
     shell_task.state = TASK_STATE_READY;
     shell_task.id = 0; // Will be assigned 1
@@ -134,11 +130,9 @@ void kernel_main(void)
         uart_printf("[BOOT] Failed to add User App Task\n");
     }
 
-    uart_printf("[BOOT] Starting Scheduler...\n");
+    uart_printf("[BOOT] Boot complete.\n");
 
-    /* Enable IRQ at CPU level (clear I-bit in CPSR).
-     * Must be done AFTER all IRQ setup (intc, irq framework, handlers)
-     * and BEFORE scheduler_start() so timer ticks and UART RX work. */
+    /* Enable IRQ and start scheduler */
     irq_enable();
 
     scheduler_start();
