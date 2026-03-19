@@ -11,37 +11,38 @@
 #include "uart.h"
 
 /* ============================================================
- * 640x480@60Hz timing (VESA DMT / CEA-861 VIC=1)
+ * 800x600@60Hz timing (VESA DMT)
  *
- * H: active=640, FP=16, SW=96, BP=48, total=800
- * V: active=480, FP=10, SW=2,  BP=33, total=525
- * Pixel clock: 25.175 MHz (using 25 MHz)
- * Sync: NHSYNC, NVSYNC (both negative)
+ * H: active=800, FP=40, SW=128, BP=88, total=1056
+ * V: active=600, FP=1,  SW=4,   BP=23, total=628
+ * Pixel clock: 40 MHz
+ * Sync: PHSYNC, PVSYNC (both positive)
+ * Source: QNX drm_800x600 struct (hdmi.c line 157-172)
  * ============================================================ */
 
-#define TVGA_HTOTAL         800
-#define TVGA_VTOTAL         525
-#define TVGA_HACTIVE        640
-#define TVGA_VACTIVE        480
-#define TVGA_HFP            16
-#define TVGA_HSW            96
-#define TVGA_HBP            48
-#define TVGA_VFP            10
-#define TVGA_VSW            2
-#define TVGA_VBP            33
-#define TVGA_HSKEW          0       /* No HSKEW for VGA */
+#define TSVGA_HTOTAL        1056
+#define TSVGA_VTOTAL        628
+#define TSVGA_HACTIVE       800
+#define TSVGA_VACTIVE       600
+#define TSVGA_HFP           40
+#define TSVGA_HSW           128
+#define TSVGA_HBP           88
+#define TSVGA_VFP           1
+#define TSVGA_VSW           4
+#define TSVGA_VBP           23
+#define TSVGA_HSKEW         128     /* QNX: 0x80 */
 
 /* TDA timing values — QNX formula (hdmi.c lines 469-505) */
-#define TDA_REF_PIX         (3 + TVGA_HFP + TVGA_HSKEW)                /* 19  */
-#define TDA_REF_LINE        (1 + TVGA_VFP)                              /* 11  */
-#define TDA_DE_PIX_S        (TVGA_HTOTAL - TVGA_HACTIVE)                /* 160 */
-#define TDA_DE_PIX_E        (TDA_DE_PIX_S + TVGA_HACTIVE)               /* 800 */
-#define TDA_HS_PIX_S        TVGA_HFP                                    /* 16  */
-#define TDA_HS_PIX_E        (TVGA_HFP + TVGA_HSW)                       /* 112 */
-#define TDA_VS1_LINE_S      TVGA_VFP                                    /* 10  */
-#define TDA_VS1_LINE_E      (TVGA_VFP + TVGA_VSW)                       /* 12  */
-#define TDA_VWIN1_LINE_S    (TVGA_VTOTAL - TVGA_VACTIVE - 1)            /* 44  */
-#define TDA_VWIN1_LINE_E    (TDA_VWIN1_LINE_S + TVGA_VACTIVE)           /* 524 */
+#define TDA_REF_PIX         (3 + TSVGA_HFP + TSVGA_HSKEW)              /* 171 */
+#define TDA_REF_LINE        (1 + TSVGA_VFP)                             /* 2   */
+#define TDA_DE_PIX_S        (TSVGA_HTOTAL - TSVGA_HACTIVE)              /* 256 */
+#define TDA_DE_PIX_E        (TDA_DE_PIX_S + TSVGA_HACTIVE)              /* 1056*/
+#define TDA_HS_PIX_S        TSVGA_HFP                                   /* 40  */
+#define TDA_HS_PIX_E        (TSVGA_HFP + TSVGA_HSW)                     /* 168 */
+#define TDA_VS1_LINE_S      TSVGA_VFP                                   /* 1   */
+#define TDA_VS1_LINE_E      (TSVGA_VFP + TSVGA_VSW)                     /* 5   */
+#define TDA_VWIN1_LINE_S    (TSVGA_VTOTAL - TSVGA_VACTIVE - 1)          /* 27  */
+#define TDA_VWIN1_LINE_E    (TDA_VWIN1_LINE_S + TSVGA_VACTIVE)          /* 627 */
 
 /* ============================================================
  * Internal state
@@ -226,7 +227,7 @@ static void tda_write_avi_infoframe(void)
     buf[4]  = 0x10;   /* PB1: Y=00 (RGB), A0=1 (active format valid) */
     buf[5]  = 0x18;   /* PB2: C=00 (default), M=01 (4:3), R=1000 (same as coded) */
     buf[6]  = 0x00;   /* PB3 */
-    buf[7]  = 0x01;   /* PB4: VIC = 1 (640x480 60Hz) */
+    buf[7]  = 0x00;   /* PB4: VIC=0 (800x600 is VESA-only, no CEA VIC) */
     buf[8]  = 0x00;   /* PB5: no pixel repetition */
     buf[9]  = 0x00;   buf[10] = 0x00;
     buf[11] = 0x00;   buf[12] = 0x00;
@@ -311,8 +312,8 @@ static void tda_enable_video(void)
     tda_write(REG_SEL_CLK, SEL_CLK_SEL_VRF_CLK(0) |
               SEL_CLK_SEL_CLK1 | SEL_CLK_ENA_SC_CLK);
     /* NOSC = 148500/pixel_clock_kHz - 1, clamped to 3.
-     * 640x480@25MHz: 148500/25000=5, -1=4, clamp=3 */
-    tda_write(REG_PLL_SERIAL_2, PLL_SERIAL_2_SRL_NOSC(3) |
+     * 800x600@40MHz: 148500/40000=3, -1=2 */
+    tda_write(REG_PLL_SERIAL_2, PLL_SERIAL_2_SRL_NOSC(2) |
               PLL_SERIAL_2_SRL_PR(0));
 
     /* Color matrix: bypass only (QNX: reg_set MAT_BP, no MAT_SC change) */
@@ -341,8 +342,8 @@ static void tda_enable_video(void)
     tda_write16(REG_REFPIX_MSB,  TDA_REF_PIX);                   /* 153  */
     tda_write16(REG_REFLINE_MSB, TDA_REF_LINE);                  /* 6    */
 
-    tda_write16(REG_NPIX_MSB,  TVGA_HTOTAL);                      /* 800  */
-    tda_write16(REG_NLINE_MSB, TVGA_VTOTAL);                     /* 525  */
+    tda_write16(REG_NPIX_MSB,  TSVGA_HTOTAL);                     /* 1056 */
+    tda_write16(REG_NLINE_MSB, TSVGA_VTOTAL);                    /* 628  */
 
     /* VSYNC (progressive) */
     tda_write16(REG_VS_LINE_STRT_1_MSB, TDA_VS1_LINE_S);         /* 5   */
@@ -376,18 +377,12 @@ static void tda_enable_video(void)
     tda_clear(REG_TBG_CNTRL_0, TBG_CNTRL_0_SYNC_MTHD);
 
     /* VIP_CNTRL_3: sync on HSYNC.
-     * 640x480 has NHSYNC/NVSYNC → toggle both to make TDA see positive.
-     * QNX (hdmi.c line 563-565): set H_TGL for NHSYNC, V_TGL for NVSYNC. */
+     * 800x600 has PHSYNC/PVSYNC → no toggle needed. */
     tda_write(REG_VIP_CNTRL_3, 0);
     tda_set(REG_VIP_CNTRL_3, VIP_CNTRL_3_SYNC_HS);
-    tda_set(REG_VIP_CNTRL_3, VIP_CNTRL_3_H_TGL);
-    tda_set(REG_VIP_CNTRL_3, VIP_CNTRL_3_V_TGL);
 
-    /* TBG_CNTRL_1: TGL_EN + revert the toggles at output stage.
-     * QNX (hdmi.c line 571-575): always TGL_EN, add H_TGL/V_TGL
-     * for negative sync modes to undo the input toggle. */
-    tda_write(REG_TBG_CNTRL_1, TBG_CNTRL_1_TGL_EN |
-              TBG_CNTRL_1_H_TGL | TBG_CNTRL_1_V_TGL);
+    /* TBG: TGL_EN only, no H_TGL/V_TGL for positive sync */
+    tda_write(REG_TBG_CNTRL_1, TBG_CNTRL_1_TGL_EN);
 
     /* Enable HDMI + encoder */
     tda_clear(REG_TBG_CNTRL_1, TBG_CNTRL_1_DWIN_DIS);
@@ -430,7 +425,7 @@ void tda19988_init(void)
     /* Step 3: Enable ports + VIP mux + full video path (QNX: dpms → mode_set)
      * This runs BEFORE LCDC raster starts, matching QNX init_hdmi() order. */
     tda_enable_video();
-    uart_printf("[TDA] Video path configured (640x480@60Hz)\n");
+    uart_printf("[TDA] Video path configured (800x600@60Hz)\n");
     uart_printf("[TDA] Waiting for LCDC raster to provide pixel clock + data\n");
 
     /* Comprehensive diagnostic readback */

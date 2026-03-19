@@ -171,22 +171,23 @@ static void lcd_pinmux_setup(void)
 #define VSYNC_INVERT    (1 << 20)
 
 /* ============================================================
- * 640x480 @ 60Hz VESA DMT / CEA VIC=1
+ * 800x600 @ 60Hz VESA DMT
  * ============================================================
- * Pixel clock: 25.175 MHz (using 25 MHz — within TV tolerance)
- * Sync: NHSYNC, NVSYNC (both negative)
+ * Pixel clock: 40 MHz
+ * Sync: PHSYNC, PVSYNC (both positive)
+ * Source: QNX drm_800x600 struct (hdmi.c line 157-172)
  * ============================================================ */
 
-#define DISPLAY_WIDTH   640
-#define DISPLAY_HEIGHT  480
+#define DISPLAY_WIDTH   800
+#define DISPLAY_HEIGHT  600
 #define DISPLAY_BPP     16      /* RGB565 = 2 bytes per pixel */
-#define DISPLAY_HFP     16
-#define DISPLAY_HBP     48
-#define DISPLAY_HSW     96
-#define DISPLAY_VFP     10
-#define DISPLAY_VBP     33
-#define DISPLAY_VSW     2
-#define PIXEL_CLOCK     25000000    /* 25 MHz (≈25.175 MHz) */
+#define DISPLAY_HFP     40
+#define DISPLAY_HBP     88
+#define DISPLAY_HSW     128
+#define DISPLAY_VFP     1
+#define DISPLAY_VBP     23
+#define DISPLAY_VSW     4
+#define PIXEL_CLOCK     40000000    /* 40 MHz */
 
 /* ============================================================
  * Framebuffer Layout
@@ -227,13 +228,13 @@ static uint16_t *fb_pixels = NULL;  /* pointer to first pixel (after palette), R
  * CLKINP = 24 MHz
  *
  * CLKDIV must be >= 2 (AM335x TRM: CLKDIV=0 or 1 is invalid).
- * So DPLL must output 2x pixel clock = 50 MHz.
- * M=25, N=11, M2=1: Fdpll = 24 * 25 / 12 = 50 MHz
- * CLKDIV=2: LCD_PCLK = 50 / 2 = 25 MHz ✓
+ * DPLL output = 2 × 40 = 80 MHz.
+ * M=10, N=2, M2=1: Fdpll = 24 * 10 / 3 = 80 MHz
+ * CLKDIV=2: LCD_PCLK = 80 / 2 = 40 MHz ✓
  */
 
-#define DPLL_DISP_M     25
-#define DPLL_DISP_N     11      /* divider = N + 1 = 12 */
+#define DPLL_DISP_M     10
+#define DPLL_DISP_N     2       /* divider = N + 1 = 3 */
 #define DPLL_DISP_M2    1
 #define LCDC_CLKDIV     2
 
@@ -404,18 +405,8 @@ void lcdc_init(void)
                  LCD_VSW(DISPLAY_VSW) |
                  LCD_VERLSB(DISPLAY_HEIGHT));
 
-    /* TIMING_2 polarity and control flags.
-     * QNX tda998x_drm_to_panel() (hdmi.c line 640):
-     *   Base: LCDC_HSVS_CONTROL | LCDC_INV_PIX_CLOCK | LCDC_HSVS_FALLING_EDGE
-     *   PHSYNC → set IHS (invert to match TDA expectation)
-     *   NVSYNC → set IVS
-     *
-     * 640x480 has NHSYNC + NVSYNC:
-     *   QNX: no LCDC_INV_HSYNC (NHSYNC = don't invert)
-     *   QNX: LCDC_INV_VSYNC (NVSYNC = invert)
-     *   bit 22 = IPC (INV_PIX_CLOCK = 1, always)
-     *   bit 21 = IHS = 0 (NHSYNC → don't invert)
-     *   bit 20 = IVS = 1 (NVSYNC → invert) */
+    /* TIMING_2 polarity — 800x600 has PHSYNC/PVSYNC (positive).
+     * QNX: PHSYNC → set IHS, PVSYNC → don't set IVS. */
     mmio_write32(LCDC_BASE + LCD_RASTER_TIMING_2,
                  LCD_HSWMSB(DISPLAY_HSW) |
                  LCD_VERMSB(DISPLAY_HEIGHT) |
@@ -424,7 +415,7 @@ void lcdc_init(void)
                  SYNC_CTRL |
                  SYNC_EDGE |
                  PCLK_INVERT |
-                 VSYNC_INVERT |
+                 HSYNC_INVERT |
                  0x0000FF00);    /* AC bias frequency */
 
     /* Raster NOT enabled here — call lcdc_start_raster() after TDA19988 is
