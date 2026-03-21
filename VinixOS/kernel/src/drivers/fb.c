@@ -249,6 +249,33 @@ void fb_puts_scaled(uint32_t x, uint32_t y, const char *str, uint16_t fg, uint16
 }
 
 /* ============================================================
+ * Circle drawing
+ * ============================================================ */
+
+/* Integer square root — scanline approach, no stdlib needed.
+ * For r <= 55: max 55 iterations per call, negligible at 800MHz. */
+static uint32_t fb_isqrt(uint32_t n)
+{
+    uint32_t x = 0;
+    while ((x + 1) * (x + 1) <= n)
+        x++;
+    return x;
+}
+
+void fb_fillcircle(uint32_t cx, uint32_t cy, uint32_t r, uint16_t color)
+{
+    /* Scanline fill: for each dy, compute horizontal span dx.
+     * fb_fillrect clips bounds, including uint32_t underflow cases
+     * (e.g. cx < dx → cx-dx wraps to huge value → clipped out). */
+    for (uint32_t dy = 0; dy <= r; dy++) {
+        uint32_t dx = fb_isqrt(r * r - dy * dy);
+        fb_fillrect(cx - dx, cy - dy, 2 * dx + 1, 1, color);
+        if (dy > 0)
+            fb_fillrect(cx - dx, cy + dy, 2 * dx + 1, 1, color);
+    }
+}
+
+/* ============================================================
  * Console mode
  * ============================================================ */
 

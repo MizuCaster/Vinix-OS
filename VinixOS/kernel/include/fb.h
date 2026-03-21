@@ -61,6 +61,9 @@ void fb_draw_char_scaled(uint32_t x, uint32_t y, char c, uint16_t fg, uint16_t b
 /** Draw a scaled string */
 void fb_puts_scaled(uint32_t x, uint32_t y, const char *str, uint16_t fg, uint16_t bg, uint32_t scale);
 
+/** Fill a solid circle with center (cx, cy) and radius r */
+void fb_fillcircle(uint32_t cx, uint32_t cy, uint32_t r, uint16_t color);
+
 /* ============================================================
  * Console mode — auto cursor, newline, scroll
  * ============================================================ */
