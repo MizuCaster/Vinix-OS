@@ -1,239 +1,140 @@
 # NothanOS
 
-**NothanOS là hệ điều hành mã nguồn mở viết từ đầu cho kiến trúc ARM, hiện đang chạy trên AM335x (ARMv7-A).**
+Hệ điều hành viết từ đầu cho ARMv7-A, chạy trên BeagleBone Black (TI AM335x, Cortex-A8).
 
-Phát triển bởi **Vinalinux**. Toàn bộ stack — bootloader, kernel, libc, userspace, compiler — đều do nhóm tự viết. Không fork Linux, không port BSD, không nhúng upstream code. Mỗi dòng trong repo đều được tự tay gõ, hiểu rõ và chịu trách nhiệm.
+Bootloader, kernel, thư viện C và ứng dụng đều do Vinalinux tự viết, không dựa trên Linux hay BSD. Bản hiện tại chạy một thiết bị điện thoại để bàn: màn hình cảm ứng HDMI, gọi thoại và nhắn tin SMS qua module SIM7600CE.
 
----
+## Tính năng
 
-## Mục tiêu
-
-NothanOS được xây dựng với hai mục tiêu song hành:
-
-**Học tập.** Cách tốt nhất để hiểu một hệ điều hành không phải là đọc sách về nó, mà là tự tay viết ra nó. Từ bootloader nạp kernel khỏi SD card, MMU dựng page table, scheduler chia thời gian CPU, driver đẩy byte qua UART, cho đến shell phân tích lệnh người dùng — mỗi lớp trong NothanOS là một câu hỏi đã được trả lời bằng code, không phải bằng tóm tắt.
-
-**Tự chủ công nghệ.** Trong các lĩnh vực đòi hỏi kiểm soát tuyệt đối — quốc phòng, công nghiệp, hạ tầng trọng yếu — việc xây dựng sản phẩm trên một kernel hàng triệu dòng do bên thứ ba duy trì là một rủi ro chiến lược. NothanOS hướng đến vai trò một stack thay thế cho các nhóm cần sở hữu toàn diện công nghệ nền: đọc được, sửa được, audit được, và không phụ thuộc vào bất kỳ thượng nguồn nào.
-
----
+- Monolithic kernel, MMU bật, mỗi tiến trình có không gian địa chỉ riêng
+- Scheduler ưu tiên cố định, preemptive, O(1), 32 mức
+- Tạo tiến trình bằng `spawn` (không có `fork`)
+- Bộ nhớ: buddy allocator, slab, page table theo tiến trình
+- VFS với FAT32 trên thẻ SD và devfs
+- Driver: HDMI (LCDC + TDA19988), USB host (cảm ứng HID), SD/MMC, UART, I2C, GPIO
+- Bootloader riêng thay U-Boot
+- GUI trên LVGL, điều khiển modem qua AT command
 
 ## Kiến trúc
 
-**Monolithic kernel.** Driver, filesystem, scheduler và memory manager cùng chia sẻ không gian địa chỉ kernel tại VA `0xC0000000`. Mô hình này hy sinh sự cô lập của microkernel để đổi lấy sự đơn giản trong thiết kế và hiệu năng truy cập trực tiếp — một sự đánh đổi hợp lý cho phần cứng nhúng nhỏ và cho mục tiêu giáo dục.
+```text
+╔═ USER SPACE ═════════════════════════════════════════════════════════════════════════════════╗
+║ ┌─────────────────────┐ ┌────────────────────┐ ┌────────────────────┐ ┌────────────────────┐ ║
+║ │         GUI         │ │    Phone Daemon    │ │   Storage Daemon   │ │       Shell        │ ║
+║ │  LVGL · Phone · SMS │ │    modem owner     │ │background SD writes│ │   admin console    │ ║
+║ └─────────────────────┘ └────────────────────┘ └────────────────────┘ └────────────────────┘ ║
+║ ┌──────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║ │               nothanlibc — crt0 · syscall wrappers · printf · string · mem               │ ║
+║ └──────────────────────────────────────────────────────────────────────────────────────────┘ ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+╔═ KERNEL SPACE ═══════════════════════════════════════════════════════════════════════════════╗
+║ ┌──────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║ │         System Call Interface — SVC · 19 syscalls · uaccess checks user pointers         │ ║
+║ └──────────────────────────────────────────────────────────────────────────────────────────┘ ║
+║ ┌─────────────────────┐ ┌────────────────────┐ ┌────────────────────┐ ┌────────────────────┐ ║
+║ │      Scheduler      │ │  Process Manager   │ │   Memory Manager   │ │Virtual File System │ ║
+║ │    32 prio · O(1)   │ │spawn · exit · kill │ │ buddy·slab·pgtable │ │ FAT32·devfs·block  │ ║
+║ └─────────────────────┘ └────────────────────┘ └────────────────────┘ └────────────────────┘ ║
+║ ┌────────────────────────────────────────────┐ ┌───────────────────────────────────────────┐ ║
+║ │                IPC Channels                │ │                Driver Model               │ ║
+║ │           phonebus · storagebus            │ │       platform bus · probe() · cdev       │ ║
+║ └────────────────────────────────────────────┘ └───────────────────────────────────────────┘ ║
+║ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ ║
+║ │   Display   │ │   USB host  │ │   SD / MMC  │ │    UART    │ │ I2C · GPIO │ │ INTC·Timer │ ║
+║ │  LCDC·HDMI  │ │  HID touch  │ │    HSMMC    │ │UART0·UART1 │ │  pinctrl   │ │ tick 10 ms │ ║
+║ └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘ └────────────┘ └────────────┘ ║
+║ ┌──────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║ │                ARM — exception vectors · MMU · context switch · board-bbb                │ ║
+║ └──────────────────────────────────────────────────────────────────────────────────────────┘ ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+╔═ HARDWARE ═══════════════════════════════════════════════════════════════════════════════════╗
+║ ┌──────────────────────────────────────────────────────────────────────────────────────────┐ ║
+║ │                                     Bootloader (MLO)                                     │ ║
+║ │                   clock 1 GHz · UART · DDR3 init · load kernel from SD                   │ ║
+║ └──────────────────────────────────────────────────────────────────────────────────────────┘ ║
+║ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ ║
+║ │  Cortex-A8  │ │  DDR3 512MB │ │   SD card   │ │ SIM7600CE  │ │ USB touch  │ │    HDMI    │ ║
+║ └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘ └────────────┘ └────────────┘ ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+```
 
-**Kế thừa triết lý Unix, nhưng không bị ràng buộc bởi lịch sử Unix.** Mô hình process, file descriptor, syscall, shell — những ý tưởng này đã được kiểm chứng qua nửa thế kỷ, và NothanOS không có lý do gì để phát minh lại chúng. Nhưng cũng có những quyết định trong Unix tồn tại đơn giản vì lý do tương thích lịch sử, không phải vì chúng là thiết kế tốt. Khi gặp những trường hợp như vậy, NothanOS sẵn sàng đi đường khác:
-
-- `spawn` thay cho `fork`+`exec`. `fork` ra đời do giới hạn của PDP-11, không phải vì copy-on-write toàn bộ không gian địa chỉ là cách đúng để tạo process mới.
-- Driver model học theo platform bus của Linux về mặt hình thức, nhưng viết lại gọn hơn — không phải gánh hàng chục năm tương thích ngược.
-- Không có syscall, API hay hành vi nào được giữ lại với lý do duy nhất là "để cho khớp với chuẩn cũ".
-
-Quy tắc: học pattern từ những kernel trưởng thành, hiểu vì sao họ làm như vậy, rồi viết từ đầu. Không copy, không port, không paraphrase.
-
----
-
-## Phần cứng đích (hiện tại)
-
-Board/SoC dưới đây là target đang dùng để dev và test — kernel không hardcode giả định riêng cho AM335x, hướng tới porting sang SoC ARM khác sau này.
-
-| Thành phần | Thông số |
+| Thành phần | Thư mục |
 | --- | --- |
-| Board | BeagleBone Black Rev.C |
-| SoC | TI AM3358 (ARMv7-A Cortex-A8, 1 GHz) |
-| RAM | 512 MB DDR3 @ `0x80000000` |
-| Boot | microSD (MMC0) → ROM → MLO → kernel |
-| Console | UART0 @ 115200 8N1 — JTAG không được sử dụng |
+| Bootloader | `bootloader/` |
+| Kiến trúc ARM, MMU, board data | `nothan-kernel/arch/arm/` |
+| Syscall, process, scheduler, VFS, filesystem | `nothan-kernel/kernel/` |
+| Memory manager | `nothan-kernel/mm/` |
+| Driver model và driver | `nothan-kernel/drivers/` |
+| GUI, daemon, shell | `userspace/{gui,phone_daemon,storage_daemon,sh}/` |
+| Thư viện C | `userspace/lib/` |
 
----
+Ứng dụng giao tiếp với nhau qua `phonebus` và `storagebus`: hai kênh IPC dạng character device trong kernel.
 
-## Yêu cầu hệ thống
+## Phần cứng
 
-### Phần cứng
+- BeagleBone Black Rev.C (AM3358, 512 MB DDR3)
+- Thẻ microSD ≥ 128 MB
+- USB-to-Serial 3.3V TTL nối UART0
+- Màn hình HDMI 800×480 có cảm ứng USB
+- Module SIM7600CE nối UART1 (tuỳ chọn, cần cho gọi/SMS)
 
-- **BeagleBone Black** Rev.C
-- **microSD card** ≥ 128 MB
-- **USB-to-Serial adapter** 3.3V TTL cho UART console — nối GND, RX, TX
-- **Nguồn 5V/2A**
+## Bắt đầu
 
-### Phần mềm
+### Cài toolchain
 
-Host OS khuyến nghị: Ubuntu 22.04 LTS. Cài dependencies bằng script tự động:
+Yêu cầu Ubuntu 22.04 trở lên.
 
 ```bash
 sudo bash scripts/setup-environment.sh
 ```
 
-Hoặc cài tay:
+Chỉ dùng `arm-none-eabi-gcc`, không dùng `arm-linux-gnueabihf-gcc`.
+
+### Build
 
 ```bash
-sudo apt-get install -y \
-    gcc-arm-none-eabi binutils-arm-none-eabi \
-    build-essential make git \
-    screen minicom parted dosfstools
+make
 ```
 
-Kiểm tra toolchain:
+Kết quả gồm `bootloader/MLO` và `nothan-kernel/build/kernel.bin` (đã nhúng sẵn userspace). Có thể build riêng từng phần bằng `make bootloader`, `make kernel` hoặc `make userspace`.
+
+### Flash thẻ SD
 
 ```bash
-arm-none-eabi-gcc --version
+sudo ./scripts/setup-sdcard.sh /dev/sdX       # lần đầu
+sudo ./scripts/deploy-and-flash.sh /dev/sdX
 ```
 
-Để dùng serial console không cần `sudo`, thêm tài khoản vào group `dialout` (cần logout/login lại):
+Script ghi thẳng vào sector của thẻ, vì vậy cần kiểm tra đúng device bằng `lsblk` trước khi chạy.
 
-```bash
-sudo usermod -a -G dialout $USER
-```
-
-> ⚠️ **Hard rule**: chỉ dùng `arm-none-eabi-*`. Tuyệt đối không mix với `arm-linux-gnueabihf-*` — một là toolchain bare-metal, một là toolchain Linux userspace, ABI và runtime hoàn toàn khác nhau.
-
----
-
-## Build và chạy
-
-### Bước 1: Clone
-
-```bash
-git clone https://github.com/Vinalinux-Org/Nothan-OS.git
-cd Nothan-OS
-```
-
-### Bước 2: Build
-
-```bash
-make              # bootloader + userspace + kernel
-make bootloader   # chỉ MLO
-make kernel       # chỉ kernel
-make userspace    # chỉ userspace
-make clean        # xoá artifacts
-```
-
-Output:
-
-- `bootloader/MLO` — first-stage bootloader
-- `nothan-kernel/build/kernel.bin` — kernel với userspace binaries nhúng sẵn
-- `userspace/build/{shell,gui,phone_daemon}.bin` — 3 process kernel spawn thẳng khi boot
-
-### Bước 3: Flash SD card
-
-Xác định device của SD card:
-
-```bash
-lsblk    # trước khi cắm
-lsblk    # sau khi cắm — device mới xuất hiện chính là SD card (ví dụ /dev/sdb)
-```
-
-Lần đầu cần khởi tạo partition; những lần sau chỉ cần deploy:
-
-```bash
-sudo ./scripts/setup-sdcard.sh /dev/sdX       # tạo partition + filesystem (một lần)
-sudo ./scripts/deploy-and-flash.sh /dev/sdX   # build + deploy rootfs + flash MLO/kernel
-```
-
-> ⚠️ Kiểm tra kỹ device trước khi chạy. `dd` ghi nhầm ổ sẽ phá huỷ dữ liệu mà không có cảnh báo.
-
-### Bước 4: Kết nối serial console
+### Boot
 
 ```bash
 screen /dev/ttyUSB0 115200
-# hoặc
-minicom -D /dev/ttyUSB0 -b 115200
 ```
 
-### Bước 5: Boot BeagleBone Black
+Cắm thẻ vào board, giữ nút BOOT rồi cấp nguồn. Khi khởi động xong, log in ra `[KERN] NothanOS started` và hiện shell.
 
-1. Cắm SD card vào BBB
-2. Giữ nút **BOOT** (gần SD card slot)
-3. Cắm nguồn 5V
-4. Thả nút BOOT sau 2–3 giây
+### Chạy GUI trên máy host
 
----
-
-## Cấu trúc project
-
-```text
-Nothan-OS/
-├── bootloader/         Stage-2 MLO: clock PLL, DDR3 init, nạp kernel từ SD
-│
-├── nothan-kernel/      Kernel chính (xem nothan-kernel/README.md)
-│   ├── arch/arm/       Boot asm, vectors, MMU, context switch, board-bbb
-│   ├── kernel/         sched, syscall, irq, time, vfs, fs (FAT32, devfs, procfs)
-│   ├── mm/             buddy allocator, slab cache
-│   ├── drivers/        platform bus + UART, INTC, DMTimer, MMC, GPIO, pinctrl
-│   ├── init/           kernel entry (main.c)
-│   └── include/nothan/ subsystem headers
-│
-├── userspace/          Ứng dụng user + libc tối giản
-│   ├── sh/             Shell: pipe, redirect, background job, builtins
-│   ├── gui/            Ứng dụng demo (LVGL) chạy trên nền OS — GUI + telephony
-│   ├── phone_daemon/   Demo backend: điều khiển modem qua AT command
-│   ├── sim/            Host simulator (SDL) để dev GUI không cần board thật
-│   └── lib/            nothanlibc (POSIX subset) + LVGL vendored
-│
-├── compiler/           NothCC — trình biên dịch C tự viết bằng Python
-│   └── toolchain/      frontend (lexer/parser) → IR → backend ARMv7
-│
-├── reference/          Tài liệu phần cứng (AM335x TRM, ARM ARM, BBB schematics)
-│
-├── scripts/            setup-environment, setup-sdcard, deploy-and-flash, install-compiler
-│
-├── CLAUDE.md           Hard rules: toolchain, driver model, debug workflow
-├── Makefile            Top-level orchestration
-├── LICENSE             Prosperity Public License 3.0.0
-└── README.md
+```bash
+sudo apt install libsdl2-dev
+make -C userspace/sim && ./userspace/sim/nothan-sim
 ```
 
----
+Lệnh này build GUI chạy trên SDL, có giả lập modem.
 
-## Nguyên tắc thiết kế
+## Đóng góp
 
-| Nguyên tắc | Ví dụ |
-| --- | --- |
-| **100% hand-written** | Không fork/port Linux, musl, BusyBox, lwIP. Mọi dòng tự viết. |
-| **Linux-inspired API shape** | `task_struct`, `platform_driver`, `spinlock_t` — pattern Linux, code NothanOS |
-| **Diverge khi có lý do** | `spawn` thay `fork`, driver model gọn hơn — không giữ legacy chỉ vì compatibility |
-| **Simplicity over features** | `MAX_TASKS = 5`, single priority, buddy allocator đơn giản |
-| **Correctness over performance** | Flush toàn bộ TLB khi switch, không nested interrupts |
-| **Real hardware only** | Mọi feature phải pass trên BBB thật, không QEMU |
-| **UART log là công cụ duy nhất** | Không JTAG. Driver log với prefix `[MODULE]`. Abort dump DFSR/DFAR đầy đủ. |
+- Không copy, port hay paraphrase code từ upstream nào, kể cả Linux, BSD hay musl.
+- Driver không hardcode địa chỉ hoặc IRQ. Dữ liệu riêng của board đặt trong `arch/arm/mach-omap2/board-bbb.c`, mọi khởi tạo phần cứng đặt trong `probe()`.
+- Code style: `gnu11`, indent bằng tab, brace kiểu K&R.
+- Commit message viết bằng tiếng Anh, theo dạng `Type(scope): summary`, ví dụ `Fix(mmc): ...`.
 
----
+## Thư viện bên thứ ba
 
-## Nguyên tắc đóng góp mã nguồn
-
-NothanOS chào đón đóng góp từ cộng đồng. Để giữ codebase nhất quán với triết lý của dự án, mọi contribution cần tuân theo những nguyên tắc dưới đây.
-
-**Về nguồn gốc mã.** Không copy, port, hay paraphrase code từ Linux, BSD, musl, BusyBox, hay bất kỳ upstream nào khác. Được phép học pattern từ những kernel trưởng thành, nhưng phải hiểu lý do tại sao họ làm như vậy, rồi viết lại từ đầu bằng cách diễn đạt của mình. Nếu một đoạn code có thể bị nhầm là sao chép, hãy refactor cho đến khi không còn nhầm được nữa.
-
-**Về kiến trúc driver.** Driver phải portable — không hardcode base address, IRQ number, hay bất kỳ giá trị nào đặc thù cho BeagleBone Black. Mọi dữ liệu board-specific nằm trong `arch/arm/mach-omap2/board-bbb.c`. Mọi hardware init xảy ra trong `probe()`; không có `xxx_init()` public gọi từ `main.c`.
-
-**Về toolchain.** Chỉ dùng `arm-none-eabi-*` cho kernel và userspace. Không mix với `arm-linux-gnueabihf-*` — ABI và runtime hoàn toàn khác nhau, mix vào sẽ gây lỗi khó truy ngược.
-
-**Về code style.** Code tuân theo chuẩn `gnu11` (C11 với GNU extension), khớp với `-std=gnu11` trong Makefile. Indent 8 space (hard tab), brace theo K&R style, dòng không quá 100 ký tự. Đặt tên theo convention của subsystem: hàm `lower_snake_case`, struct `lower_snake_case`, macro và hằng số `UPPER_SNAKE_CASE`. Comment tập trung vào *vì sao* và những ràng buộc không lộ qua tên hàm — không lặp lại điều mà code đã nói rõ.
-
-**Về header bản quyền.** Mọi file source (`.c`, `.S`, `.h`) phải mở đầu bằng header xác định tác giả và file path. Format chuẩn:
-
-```c
-/*
- * path/to/file.c - Mô tả ngắn về vai trò của file
- *
- * Written by <Tên đầy đủ> <email@example.com>
- */
-```
-
-Đây không chỉ là formality — header là dấu vết khẳng định mỗi dòng code do người thật viết ra, phù hợp với mục tiêu sovereignty của dự án. Khi sửa đáng kể một file đã có header người khác, thêm dòng `Modified by ...` bên dưới, không xoá tác giả gốc.
-
-**Về commit và pull request.** Một commit giải quyết một việc. Message viết bằng tiếng Anh theo format của NothanOS: dòng tiêu đề `Type(scope): mô tả ngắn` — `Type` viết hoa chữ cái đầu (`Feat`, `Fix`, `Chore`, `Refactor`, `Docs`), `scope` là subsystem (`kernel`, `mmc`, `pinctrl`, `bootloader`, `docs`, ...). Sau dòng tiêu đề, cách một dòng trống rồi viết phần body mô tả cụ thể đã làm những gì và vì sao — đặc biệt với commit có nhiều thay đổi liên quan. Ví dụ:
-
-```text
-Feat(pinctrl): pin mux subsystem — static table, AM335x Control Module
-
-- Thêm pinctrl-am335x driver với bảng cấu hình tĩnh
-- Map Control Module và viết API pinctrl_select cho driver consumer
-- Tích hợp pin mux vào probe của UART, MMC, GPIO
-```
-
-Tiêu đề nên ngắn và đủ thông tin để đọc mà không cần mở diff. Body tập trung vào *làm gì* và *vì sao* — phần *thế nào* đã có trong diff.
-
----
+- [LVGL](https://lvgl.io) 9.5, giấy phép MIT
 
 ## License
 
-Prosperity Public License 3.0.0 — miễn phí cho phi thương mại, xem [LICENSE](LICENSE). Dùng thương mại cần [Commercial License](COMMERCIAL-LICENSE.md). Phát triển bởi **Vinalinux**.
+[Prosperity Public License 3.0.0](LICENSE). Muốn dùng cho mục đích thương mại quá 30 ngày thì cần [giấy phép thương mại](COMMERCIAL-LICENSE.md).

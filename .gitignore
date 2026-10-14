@@ -99,3 +99,9 @@ nothan_os_old/
 # Documentation (WIP, không track)
 Documentation/
 nothan-os-modulesim/
+
+# Local-only: agent instructions, reports, test scratch
+CLAUDE.md
+report/
+tests/
+docs/
